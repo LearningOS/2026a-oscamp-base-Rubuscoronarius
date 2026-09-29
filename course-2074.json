@@ -2,8 +2,8 @@
   "schema": 1,
   "courseId": 2074,
   "repository": "LearningOS/2026a-oscamp-base-Rubuscoronarius",
-  "commit": "f95d5bac5e752e20ea5a37bc84e0783f6d399d42",
-  "score": 39,
+  "commit": "8ff14af57be31bdcdc933e75a092dd706e4a160d",
+  "score": 60,
   "totalScore": 100,
   "exercises": [
     {
@@ -72,37 +72,37 @@
     {
       "name": "atomic_counter",
       "max": 4,
-      "score": 0,
-      "status": "fail",
-      "exitCode": 101
+      "score": 4,
+      "status": "pass",
+      "exitCode": 0
     },
     {
       "name": "atomic_ordering",
       "max": 4,
-      "score": 0,
-      "status": "fail",
-      "exitCode": 101
+      "score": 4,
+      "status": "pass",
+      "exitCode": 0
     },
     {
       "name": "spinlock",
       "max": 4,
-      "score": 0,
-      "status": "fail",
-      "exitCode": 101
+      "score": 4,
+      "status": "pass",
+      "exitCode": 0
     },
     {
       "name": "spinlock_guard",
       "max": 4,
-      "score": 0,
-      "status": "fail",
-      "exitCode": 101
+      "score": 4,
+      "status": "pass",
+      "exitCode": 0
     },
     {
       "name": "rwlock",
       "max": 5,
-      "score": 0,
-      "status": "fail",
-      "exitCode": 101
+      "score": 5,
+      "status": "pass",
+      "exitCode": 0
     },
     {
       "name": "stack_coroutine",
@@ -176,9 +176,9 @@
     }
   ],
   "student": "Rubuscoronarius",
-  "runId": "36524223205",
+  "runId": "36531066572",
   "runAttempt": "1",
   "upload": {
-    "status": "accepted"
+    "status": "pending"
   }
 }
