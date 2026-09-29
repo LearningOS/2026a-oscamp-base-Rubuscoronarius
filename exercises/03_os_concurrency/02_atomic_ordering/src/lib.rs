@@ -38,20 +38,23 @@ impl FlagChannel {
     /// - What Ordering should be used for writing data?
     /// - What Ordering should be used for writing ready? (ensuring data writes are visible to consumer)
     pub fn produce(&self, value: u32) {
-        // TODO: Store data (choose appropriate Ordering)
-        // TODO: Set ready = true (choose appropriate Ordering so data writes complete before this)
-        todo!()
+        // Data write can be Relaxed: it is ordered by the Release store below
+        self.data.store(value, Ordering::Relaxed);
+        // Release: guarantees the data write above is visible to any thread
+        // that later observes ready == true with an Acquire load
+        self.ready.store(true, Ordering::Release);
     }
 
     /// Consumer: spin-wait for ready flag, then read data.
-    ///
-    /// TODO: Choose correct Ordering
-    /// - What Ordering should be used for reading ready? (ensuring it sees data writes from produce)
-    /// - What Ordering should be used for reading data?
     pub fn consume(&self) -> u32 {
-        // TODO: Spin-wait for ready to become true (choose appropriate Ordering)
-        // TODO: Read data (choose appropriate Ordering)
-        todo!()
+        // Acquire: pairs with the producer's Release store, so everything
+        // the producer wrote before setting ready is now visible
+        while !self.ready.load(Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+        // Safe to read with Relaxed: the Acquire load above already established
+        // the happens-before edge covering the data write
+        self.data.load(Ordering::Relaxed)
     }
 
     /// Reset channel state
@@ -81,15 +84,32 @@ impl OnceCell {
     ///
     /// Hint: use `compare_exchange` to ensure only one thread succeeds.
     pub fn init(&self, val: u32) -> bool {
-        // TODO: Use compare_exchange to ensure initialization only once
-        // Store value on success
-        todo!()
+        // Only the thread that wins the CAS flips false -> true and gets to
+        // store the value; losers must NOT touch `value` (otherwise a failed
+        // init would clobber the value chosen by the winner).
+        // AcqRel: release makes our value write visible, acquire sees others'.
+        match self
+            .initialized
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => {
+                // Release pairs with the Acquire load in `get`
+                self.value.store(val, Ordering::Release);
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     /// Get value. Returns Some if initialized, otherwise None.
     pub fn get(&self) -> Option<u32> {
-        // TODO: Check initialized flag, then read value
-        todo!()
+        // Acquire: synchronizes with the successful init's Release store,
+        // so the value written by the winner is visible here
+        if self.initialized.load(Ordering::Acquire) {
+            Some(self.value.load(Ordering::Acquire))
+        } else {
+            None
+        }
     }
 }
 

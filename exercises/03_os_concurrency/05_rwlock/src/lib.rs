@@ -62,20 +62,55 @@ impl<T> RwLock<T> {
     /// 3. If reader count (state & READER_MASK) is already READER_MASK, spin and continue.
     /// 4. Try compare_exchange(s, s + 1, AcqRel, Acquire); on success return RwLockReadGuard { lock: self }.
     pub fn read(&self) -> RwLockReadGuard<'_, T> {
-        // TODO
-        todo!()
+        loop {
+            let s = self.state.load(Ordering::Acquire);
+            // Writer-priority: block new readers while a writer holds or waits
+            if s & (WRITER_HOLDING | WRITER_WAITING) != 0 {
+                core::hint::spin_loop();
+                continue;
+            }
+            // Reader count saturated
+            if s & READER_MASK == READER_MASK {
+                core::hint::spin_loop();
+                continue;
+            }
+            if self
+                .state
+                .compare_exchange(s, s + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return RwLockReadGuard { lock: self };
+            }
+            core::hint::spin_loop();
+        }
     }
 
     /// Acquire the write lock. Blocks until no readers and no other writer.
-    ///
-    /// TODO: Implement write lock acquisition (writer-priority)
-    /// 1. Set WRITER_WAITING first: fetch_or(WRITER_WAITING, Release) so new readers will block.
-    /// 2. In a loop: load state; if any readers (READER_MASK) or WRITER_HOLDING, spin_loop and continue.
-    /// 3. Try compare_exchange(WRITER_WAITING, WRITER_HOLDING, ...) to take the lock; or compare_exchange(0, WRITER_HOLDING, ...) if a writer just released.
-    /// 4. On success return RwLockWriteGuard { lock: self }.
     pub fn write(&self) -> RwLockWriteGuard<'_, T> {
-        // TODO
-        todo!()
+        // Announce that a writer is waiting, so new readers are blocked
+        self.state.fetch_or(WRITER_WAITING, Ordering::Release);
+
+        loop {
+            let s = self.state.load(Ordering::Acquire);
+            // Wait until all readers left and no writer holds the lock
+            if s & READER_MASK != 0 || s & WRITER_HOLDING != 0 {
+                core::hint::spin_loop();
+                continue;
+            }
+            // No readers and no writer holding: take the lock.
+            // (`s` is either 0, or WRITER_WAITING if a previous writer's drop
+            //  has not yet cleared our waiting bit.)
+            let expected = s & WRITER_WAITING;
+            let desired = WRITER_HOLDING;
+            if self
+                .state
+                .compare_exchange(expected, desired, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return RwLockWriteGuard { lock: self };
+            }
+            core::hint::spin_loop();
+        }
     }
 }
 
@@ -90,15 +125,16 @@ impl<T> Deref for RwLockReadGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        todo!()
+        // SAFETY: we hold a read lock; readers only get shared access
+        unsafe { &*self.lock.data.get() }
     }
 }
 
-// TODO: Implement Drop for RwLockReadGuard
-// Decrement reader count: self.lock.state.fetch_sub(1, Ordering::Release)
+// Drop for RwLockReadGuard
 impl<T> Drop for RwLockReadGuard<'_, T> {
     fn drop(&mut self) {
-        todo!()
+        // Release the reader slot; Release pairs with writers' Acquire loads
+        self.lock.state.fetch_sub(1, Ordering::Release);
     }
 }
 
@@ -113,23 +149,27 @@ impl<T> Deref for RwLockWriteGuard<'_, T> {
     type Target = T;
 
     fn deref(&self) -> &T {
-        todo!()
+        // SAFETY: we hold the write lock exclusively
+        unsafe { &*self.lock.data.get() }
     }
 }
 
-// TODO: Implement DerefMut for RwLockWriteGuard
-// Return mutable reference: unsafe { &mut *self.lock.data.get() }
+// DerefMut for RwLockWriteGuard
 impl<T> DerefMut for RwLockWriteGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut T {
-        todo!()
+        // SAFETY: we hold the write lock exclusively
+        unsafe { &mut *self.lock.data.get() }
     }
 }
 
-// TODO: Implement Drop for RwLockWriteGuard
-// Clear writer bits so lock is free: self.lock.state.fetch_and(!(WRITER_HOLDING | WRITER_WAITING), Ordering::Release)
+// Drop for RwLockWriteGuard
 impl<T> Drop for RwLockWriteGuard<'_, T> {
     fn drop(&mut self) {
-        todo!()
+        // Clear both writer bits: the lock becomes free (waiting writers then
+        // race to take it, and readers may enter if no writer is waiting)
+        self.lock
+            .state
+            .fetch_and(!(WRITER_HOLDING | WRITER_WAITING), Ordering::Release);
     }
 }
 
