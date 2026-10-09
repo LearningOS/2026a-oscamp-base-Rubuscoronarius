@@ -137,7 +137,24 @@ impl Scheduler {
     ///    `sp` must be 16-byte aligned (e.g. `(stack_top - 16) & !15` to leave headroom).
     /// 3. Push a `GreenThread` with this context, state `Ready`, and `entry` stored for the wrapper to call.
     pub fn spawn(&mut self, entry: extern "C" fn()) {
-        todo!("alloc stack, init ctx with ra=thread_wrapper and aligned sp, push GreenThread(Ready, entry)")
+        // Each thread owns its stack; storing it in the GreenThread keeps the
+        // backing allocation alive for as long as the context may use it.
+        let stack = vec![0u8; STACK_SIZE];
+        let stack_top = (stack.as_ptr() as usize + STACK_SIZE) & !0xF;
+
+        let mut ctx = TaskContext::default();
+        // The first switch into this thread lands on the wrapper, which is what
+        // calls the user entry and then reports the thread as finished.
+        ctx.ra = thread_wrapper as *const () as usize as u64;
+        // Leave 16 bytes of headroom below the top and keep sp 16-byte aligned.
+        ctx.sp = ((stack_top - 16) & !0xF) as u64;
+
+        self.threads.push(GreenThread {
+            ctx,
+            state: ThreadState::Ready,
+            _stack: Some(stack),
+            entry: Some(entry),
+        });
     }
 
     /// Run the scheduler until all threads (except the main one) are `Finished`.
@@ -146,12 +163,63 @@ impl Scheduler {
     /// 2. Loop: if all threads in `threads[1..]` are `Finished`, break; otherwise call `schedule_next()` (which may switch away and later return).
     /// 3. Clear `SCHEDULER` when done.
     pub fn run(&mut self) {
-        todo!("set SCHEDULER to self, loop until threads[1..] all Finished, call schedule_next, then clear SCHEDULER")
+        // Publish the scheduler so `yield_now` / `thread_finished` can call back
+        // into it from inside a green thread.
+        unsafe { SCHEDULER = self as *mut Scheduler };
+
+        loop {
+            // Slot 0 is the main thread; we are done once every spawned thread
+            // has run to completion.
+            if self.threads[1..]
+                .iter()
+                .all(|t| t.state == ThreadState::Finished)
+            {
+                break;
+            }
+            // May switch away to another thread and only return much later, when
+            // some thread yields back to us.
+            self.schedule_next();
+        }
+
+        unsafe { SCHEDULER = core::ptr::null_mut() };
     }
 
     /// Find the next ready thread (starting from `current + 1` round-robin), mark current as `Ready` (if not `Finished`), mark next as `Running`, set `CURRENT_THREAD_ENTRY` if the next thread has an entry, then switch to it.
     fn schedule_next(&mut self) {
-        todo!("round-robin find next Ready, set current Ready (if not Finished), next Running, CURRENT_THREAD_ENTRY, then switch_context")
+        let n = self.threads.len();
+
+        // Round-robin: start from the thread after `current`, wrap around.
+        // `current` is excluded for now because it is still Running, not Ready.
+        let next = (1..=n)
+            .map(|step| (self.current + step) % n)
+            .find(|&idx| self.threads[idx].state == ThreadState::Ready);
+
+        // Nothing else is runnable; just keep running the current thread.
+        let Some(next) = next else {
+            return;
+        };
+
+        let prev = self.current;
+
+        // Park the outgoing thread (unless it already finished on its own).
+        if self.threads[prev].state != ThreadState::Finished {
+            self.threads[prev].state = ThreadState::Ready;
+        }
+        self.threads[next].state = ThreadState::Running;
+
+        // Hand the user entry to the wrapper exactly once, on the first run.
+        // `take()` makes later re-schedules of the same thread a no-op.
+        if let Some(entry) = self.threads[next].entry.take() {
+            unsafe { CURRENT_THREAD_ENTRY = Some(entry) };
+        }
+
+        // Update `current` before switching: the context we are about to resume
+        // reads `self.current` as "who am I" as soon as it unwinds back here.
+        self.current = next;
+
+        let old = self.threads[prev].ctx.as_mut_ptr();
+        let new = self.threads[next].ctx.as_ptr();
+        unsafe { switch_context(&mut *old, &*new) };
     }
 }
 
